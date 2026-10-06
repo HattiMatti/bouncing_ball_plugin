@@ -218,7 +218,7 @@ fn layout_title(ui: &egui::Ui, text: &str, size: f32) -> std::sync::Arc<egui::ep
 /// The line is kept inside the circle and nudged toward the rim.
 fn title_place(ui: &egui::Ui, radius: f32) -> (f32, f32, f32) {
     let probe = layout_title(ui, TITLE, 100.0);
-    let size = (100.0 * radius * 1.15 / probe.rect.width().max(1.0)).clamp(18.0, radius * 0.28);
+    let size = (100.0 * radius * 2.0 / probe.rect.width().max(1.0)).clamp(18.0, radius * 0.8);
     let galley = layout_title(ui, TITLE, size);
     let half_w = galley.rect.width() * 0.5 + 10.0;
     let half_h = galley.rect.height() * 0.5;
