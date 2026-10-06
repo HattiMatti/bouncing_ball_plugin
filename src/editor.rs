@@ -351,21 +351,18 @@ fn paint_inset(painter: &egui::Painter, rect: Rect, hovered: bool) {
     );
 }
 
-/// Control block at the bottom center of the ball, kept inside the rim.
+/// Control block in the lower left of the ball, kept inside the rim.
+/// The right edge is the vertical center line. The bottom is as low as that
+/// width can sit before the left corners would leave the circle.
 fn centered_panel(center: Pos2, radius: f32) -> Rect {
     let inset = 28.0;
-    let half_h = radius * 0.38;
-    let bottom_y = center.y + radius - inset;
-    let top_y = bottom_y - half_h * 2.0;
-    let half = |y: f32| {
-        let dy = y - center.y;
-        (radius * radius - dy * dy).max(0.0).sqrt() - inset
-    };
-    let half_w = half(top_y).min(half(bottom_y)).min(radius * 0.58).max(90.0);
-    Rect::from_center_size(
-        pos2(center.x, (top_y + bottom_y) * 0.5),
-        vec2(half_w * 2.0, bottom_y - top_y),
-    )
+    let height = radius * 0.76;
+    let width = radius * 0.45;
+    let limit = width + inset;
+    let dy_bottom = (radius * radius - limit * limit).max(0.0).sqrt();
+    let bottom_y = center.y + dy_bottom;
+    let top_y = bottom_y - height;
+    Rect::from_min_max(pos2(center.x - width, top_y), pos2(center.x, bottom_y))
 }
 
 /// Largest rectangle inside the circle between two vertical positions.
@@ -1006,11 +1003,12 @@ mod tests {
     }
 
     #[test]
-    fn control_panel_is_centered_on_the_ball() {
+    fn control_panel_sits_on_the_left_of_the_ball() {
         let center = pos2(320.0, 320.0);
         let radius = 300.0;
         let panel = centered_panel(center, radius);
-        assert!((panel.center().x - center.x).abs() < 0.5);
+        assert!(panel.right() <= center.x + 0.5);
+        assert!(panel.left() < center.x - radius * 0.4);
         assert!(panel.center().y > center.y);
         assert!(panel.bottom() <= center.y + radius - 8.0);
         for corner in [
