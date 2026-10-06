@@ -105,6 +105,12 @@ pub struct BounceConfig {
     pub spread: f32,
     pub damping: f32,
     pub loop_sequence: bool,
+    /// When set, each gap is pulled onto the host's 16th-note grid.
+    pub on_beat: bool,
+    /// Samples in one quarter note. Unused while `on_beat` is false.
+    pub beat_samples: f32,
+    /// Song position in samples for this bounce. Absent when the host has none.
+    pub song_pos: Option<f64>,
     pub threshold: f32,
     pub velocity: f32,
 }
@@ -329,7 +335,7 @@ impl Ball {
         let fired = tick(&mut self.clock, cfg);
         self.spawn(fired.amplitude, fired.pan);
         if fired.alive {
-            self.countdown += fired.wait.max(1.0);
+            self.countdown += quantize_wait(fired.wait, cfg).max(1.0);
         }
     }
 
@@ -647,6 +653,27 @@ impl Engine {
     }
 }
 
+/// Fit a gap to the 16th-note grid so the hit lands on the beat.
+/// With no song position, the gap itself becomes a whole number of 16ths.
+pub fn quantize_wait(wait: f32, cfg: &BounceConfig) -> f32 {
+    if !cfg.on_beat {
+        return wait;
+    }
+    let grid = cfg.beat_samples * 0.25;
+    if !(grid.is_finite() && grid >= 1.0) {
+        return wait;
+    }
+    let Some(now) = cfg.song_pos else {
+        return (wait / grid).round().max(1.0) * grid;
+    };
+    let target = now + f64::from(wait);
+    let mut cells = (target / f64::from(grid)).round();
+    if cells * f64::from(grid) <= now + 0.5 {
+        cells += 1.0;
+    }
+    (cells * f64::from(grid) - now).max(1.0) as f32
+}
+
 fn hit_envelope(playhead: usize, hit_len: usize, sample_rate: f32) -> f32 {
     if hit_len == 0 {
         return 0.0;
@@ -696,6 +723,9 @@ mod tests {
             spread: 0.0,
             damping: 0.0,
             loop_sequence: false,
+            on_beat: false,
+            beat_samples: 0.0,
+            song_pos: None,
             threshold: 0.2,
             velocity: 1.0,
         }
@@ -869,6 +899,55 @@ mod tests {
         let measured = onsets[1] - onsets[0];
         assert!((measured as f32 - expected[0]).abs() <= 2.0);
         assert!(onsets[2] - onsets[1] < measured);
+    }
+
+    #[test]
+    fn on_beat_pulls_a_gap_onto_the_grid() {
+        let mut cfg = fall_cfg();
+        cfg.on_beat = true;
+        cfg.beat_samples = 24_000.0;
+        cfg.song_pos = Some(0.0);
+        let grid = 6_000.0;
+        assert!((quantize_wait(10_000.0, &cfg) - 12_000.0).abs() < 1.0e-2);
+
+        cfg.song_pos = Some(100.0);
+        let wait = quantize_wait(10_000.0, &cfg);
+        let landing = 100.0 + wait;
+        assert!((landing / grid).fract().abs() < 1.0e-3 || (landing / grid).fract() > 0.999);
+
+        cfg.on_beat = false;
+        assert!((quantize_wait(10_000.0, &cfg) - 10_000.0).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn on_beat_onsets_sit_on_sixteenths() {
+        let mut cfg = fall_cfg();
+        cfg.on_beat = true;
+        cfg.beat_samples = 24_000.0;
+        cfg.drop_samples = 10_000.0;
+        cfg.rest_samples = 1_000.0;
+        cfg.restitution = 0.8;
+        cfg.hit_samples = 200;
+
+        let mut engine = Engine::default();
+        engine.prepare(cfg.sample_rate, 8_000);
+        let mut audio = Vec::new();
+        for sample in 0..48_000 {
+            cfg.song_pos = Some(sample as f64);
+            let input = if sample < cfg.hit_samples { 1.0 } else { 0.0 };
+            let wet = engine.process_sample(&[input, input], &cfg);
+            audio.push(wet[0]);
+        }
+        let onsets = rising_edges(&audio, 0.15);
+        assert!(onsets.len() >= 3, "{onsets:?}");
+        for pair in onsets.windows(2) {
+            let gap = (pair[1] - pair[0]) as f32;
+            let cells = (gap / 6_000.0).round().max(1.0);
+            assert!(
+                (gap - cells * 6_000.0).abs() <= 4.0,
+                "gap {gap} missed the 16th-note grid ({onsets:?})"
+            );
+        }
     }
 
     #[test]

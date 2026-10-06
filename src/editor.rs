@@ -400,11 +400,22 @@ fn paint_controls(ui: &mut egui::Ui, params: &BouncingBallParams, setter: &Param
         metal_slider(&mut columns[1], &params.output, setter);
     });
     let mut looping = params.loop_sequence.value();
-    if ui.checkbox(&mut looping, "Loop").changed() {
-        setter.begin_set_parameter(&params.loop_sequence);
-        setter.set_parameter(&params.loop_sequence, looping);
-        setter.end_set_parameter(&params.loop_sequence);
-    }
+    let mut on_beat = params.on_beat.value();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 18.0;
+        if ui.checkbox(&mut looping, "Loop").changed() {
+            setter.begin_set_parameter(&params.loop_sequence);
+            setter.set_parameter(&params.loop_sequence, looping);
+            setter.end_set_parameter(&params.loop_sequence);
+        }
+        let beat = ui.checkbox(&mut on_beat, "On Beat");
+        if beat.changed() {
+            setter.begin_set_parameter(&params.on_beat);
+            setter.set_parameter(&params.on_beat, on_beat);
+            setter.end_set_parameter(&params.on_beat);
+        }
+        show_label_tip(ui, &beat, "Land each bounce on a 16th note.");
+    });
     ball_count_buttons(ui, params, setter);
 }
 

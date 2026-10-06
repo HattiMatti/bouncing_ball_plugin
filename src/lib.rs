@@ -63,6 +63,8 @@ struct BouncingBallParams {
     pub damping: FloatParam,
     #[id = "loop"]
     pub loop_sequence: BoolParam,
+    #[id = "on_beat"]
+    pub on_beat: BoolParam,
     #[id = "mix"]
     pub mix: FloatParam,
     #[id = "output"]
@@ -174,6 +176,7 @@ impl Default for BouncingBallParams {
                 .with_value_to_string(formatters::v2s_f32_percentage(0))
                 .with_string_to_value(formatters::s2v_f32_percentage()),
             loop_sequence: BoolParam::new("Loop", false),
+            on_beat: BoolParam::new("On Beat", false),
             mix: FloatParam::new("Mix", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 })
                 .with_smoother(SmoothingStyle::Linear(20.0))
                 .with_step_size(0.01)
@@ -207,7 +210,7 @@ impl Default for BouncingBall {
 }
 
 impl BouncingBall {
-    fn snapshot(&self, tempo: Option<f64>) -> BounceConfig {
+    fn snapshot(&self, tempo: Option<f64>, song_pos: Option<f64>) -> BounceConfig {
         let sample_rate = self.engine.sample_rate().max(1.0);
         let rest_samples = (self.params.rest.value() * 0.001 * sample_rate).max(1.0);
         let drop_samples = self.drop_samples(sample_rate, tempo, rest_samples);
@@ -228,6 +231,9 @@ impl BouncingBall {
             spread: self.params.spread.value().clamp(0.0, 1.0),
             damping: self.params.damping.value().clamp(0.0, 1.0),
             loop_sequence: self.params.loop_sequence.value(),
+            on_beat: self.params.on_beat.value(),
+            beat_samples: quarter_samples(sample_rate, tempo),
+            song_pos,
             threshold: util::db_to_gain(self.params.threshold.value()),
             velocity: self.engine.velocity(),
         }
@@ -244,6 +250,18 @@ impl BouncingBall {
         let from_ms = self.params.drop.value() * 0.001 * sample_rate;
         from_tempo.unwrap_or(from_ms).max(rest_samples + 1.0)
     }
+}
+
+fn quarter_samples(sample_rate: f32, tempo: Option<f64>) -> f32 {
+    let bpm = tempo
+        .filter(|bpm| bpm.is_finite() && *bpm > 1.0)
+        .map(|bpm| bpm as f32)
+        .unwrap_or(120.0);
+    60.0 / bpm * sample_rate
+}
+
+fn song_at(origin: Option<i64>, sample_id: usize) -> Option<f64> {
+    origin.map(|pos| pos as f64 + sample_id as f64)
 }
 
 impl Plugin for BouncingBall {
@@ -312,6 +330,7 @@ impl Plugin for BouncingBall {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let tempo = context.transport().tempo;
+        let song_origin = context.transport().pos_samples();
         let mut next_event = context.next_event();
         let channels = buffer.as_slice();
         let channel_count = channels.len().min(2);
@@ -327,7 +346,7 @@ impl Plugin for BouncingBall {
                 }
                 if let NoteEvent::NoteOn { velocity, .. } = event {
                     if self.params.trigger.value() == TriggerMode::Midi {
-                        let cfg = self.snapshot(tempo);
+                        let cfg = self.snapshot(tempo, song_at(song_origin, sample_id));
                         self.engine.trigger(&cfg, velocity);
                     }
                 }
@@ -342,7 +361,7 @@ impl Plugin for BouncingBall {
             } else {
                 [channels[0][sample_id], channels[1][sample_id]]
             };
-            let cfg = self.snapshot(tempo);
+            let cfg = self.snapshot(tempo, song_at(song_origin, sample_id));
             let wet = self.engine.process_sample(&frame, &cfg);
 
             if channel_count == 1 {
