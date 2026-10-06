@@ -10,7 +10,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 egui = { version = "0.36.1", features = ["default_fonts"] }
-nice-plug = "0.4"
+nice-plug = { version = "0.4", features = ["standalone"] }
 nice-plug-egui = "0.5"
 
 [profile.dev]
