@@ -3,8 +3,10 @@
 use crate::dsp::{Direction, MAX_BALLS};
 use crate::BouncingBallParams;
 use egui::{
-    emath::Align2, epaint::Mesh, pos2, vec2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Shape,
-    Stroke, StrokeKind, UiBuilder, Vec2,
+    emath::Align2,
+    epaint::{Mesh, Vertex},
+    pos2, vec2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind,
+    UiBuilder, Vec2,
 };
 use nice_plug::context::gui::GuiContext;
 use nice_plug::prelude::*;
@@ -122,8 +124,8 @@ impl NiceEguiApp for BallEditor {
             vec2(radius * 0.86, radius * 0.03),
             Stroke::new(1.0, Color32::from_white_alpha(28)),
         ));
-        let (title_y, title_h, title_px) = title_place(ui, radius);
-        let title_bottom = center.y + title_y + title_h * 0.5;
+        let title = curved_title(ui, radius);
+        let title_bottom = center.y - title.arc_radius + title.galley.rect.height() * 0.5;
         let button = Rect::from_center_size(pos2(center.x, title_bottom + 18.0), vec2(92.0, 22.0));
         if let Some(drawn) = drawn.as_ref() {
             let stage_top = ((button.bottom() + 8.0 - center.y) / radius).clamp(-0.58, -0.28);
@@ -140,13 +142,7 @@ impl NiceEguiApp for BallEditor {
             Stroke::new(2.0, Color32::from_rgb(36, 38, 42)),
         ));
 
-        engrave_font(
-            ui.painter(),
-            pos2(center.x, center.y + title_y),
-            Align2::CENTER_CENTER,
-            TITLE,
-            round_bound_font(title_px),
-        );
+        engrave_arc(ui.painter(), center, title.arc_radius, &title.galley);
 
         let hide = ui.interact(button, ui.id().with("hide-anim"), Sense::click());
         let label = if self.animate { "Hide" } else { "Show" };
@@ -214,28 +210,118 @@ fn layout_title(ui: &egui::Ui, text: &str, size: f32) -> std::sync::Arc<egui::ep
     })
 }
 
-/// Offset of the title center above the ball center, its height, and the font size.
-/// The line is kept inside the circle and nudged toward the rim.
-fn title_place(ui: &egui::Ui, radius: f32) -> (f32, f32, f32) {
-    let probe = layout_title(ui, TITLE, 100.0);
-    let size = (100.0 * radius * 2.0 / probe.rect.width().max(1.0)).clamp(18.0, radius * 0.8);
-    let galley = layout_title(ui, TITLE, size);
-    let half_w = galley.rect.width() * 0.5 + 10.0;
-    let half_h = galley.rect.height() * 0.5;
-    let room = (radius * radius - half_w * half_w).max(0.0).sqrt();
-    let from_center = (room - half_h - 6.0).max(half_h);
-    (-from_center, galley.rect.height(), size)
+/// Crown-to-end angle of the title, in radians.
+/// The letters sit on a circle concentric with the ball, so the end letters
+/// tilt by this much. Kept shallow so the line stays above the preview.
+const TITLE_HALF_ANGLE: f32 = 0.62;
+
+struct CurvedTitle {
+    galley: std::sync::Arc<egui::epaint::Galley>,
+    /// Distance from the ball center to the middle of the line.
+    arc_radius: f32,
 }
 
-fn engrave_font(painter: &egui::Painter, pos: Pos2, anchor: Align2, text: &str, font: FontId) {
-    painter.text(
-        pos + vec2(0.0, 2.0),
-        anchor,
-        text,
-        font.clone(),
+/// Font size and arc radius for a title of the given unscaled box.
+/// `width_at_100` and `height_at_100` are the galley size at font size 100.
+fn title_metrics(radius: f32, width_at_100: f32, height_at_100: f32) -> (f32, f32) {
+    let pad = 18.0;
+    let half = TITLE_HALF_ANGLE;
+    let width_per = width_at_100 / 100.0;
+    let height_per = height_at_100 / 100.0;
+    let numer = half * (radius - pad);
+    let denom = width_per * 0.5 + half * height_per * 0.5;
+    let size = (numer / denom.max(1.0e-3)).clamp(18.0, radius * 0.72);
+    let arc_radius = (radius - height_per * size * 0.5 - pad).max(radius * 0.35);
+    (size, arc_radius)
+}
+
+fn curved_title(ui: &egui::Ui, radius: f32) -> CurvedTitle {
+    let probe = layout_title(ui, TITLE, 100.0);
+    let (size, arc_radius) = title_metrics(radius, probe.rect.width(), probe.rect.height());
+    CurvedTitle {
+        galley: layout_title(ui, TITLE, size),
+        arc_radius,
+    }
+}
+
+/// Point on the title arc. `local.x` runs right from the crown, `local.y` runs
+/// down from the middle of the line, toward the ball center.
+fn arc_point(center: Pos2, arc_radius: f32, local: Vec2) -> Pos2 {
+    let theta = local.x / arc_radius;
+    let (sin, cos) = theta.sin_cos();
+    center + vec2(sin, -cos) * (arc_radius - local.y)
+}
+
+fn engrave_arc(
+    painter: &egui::Painter,
+    center: Pos2,
+    arc_radius: f32,
+    galley: &egui::epaint::Galley,
+) {
+    paint_arc(
+        painter,
+        center,
+        arc_radius,
+        galley,
+        vec2(0.0, 2.0),
         Color32::from_white_alpha(70),
     );
-    painter.text(pos, anchor, text, font, Color32::from_rgb(32, 36, 42));
+    paint_arc(
+        painter,
+        center,
+        arc_radius,
+        galley,
+        Vec2::ZERO,
+        Color32::from_rgb(32, 36, 42),
+    );
+}
+
+/// Galley meshes are straight. Each vertex is moved onto the ball's circle
+/// so the baseline and the letter tops stay concentric with the rim.
+fn paint_arc(
+    painter: &egui::Painter,
+    center: Pos2,
+    arc_radius: f32,
+    galley: &egui::epaint::Galley,
+    offset: Vec2,
+    color: Color32,
+) {
+    if galley.is_empty() || arc_radius < 1.0 {
+        return;
+    }
+    let [tex_w, tex_h] = painter.fonts(|fonts| fonts.font_image_size());
+    if tex_w == 0 || tex_h == 0 {
+        return;
+    }
+    let uv_scale = vec2(1.0 / tex_w as f32, 1.0 / tex_h as f32);
+    let origin = galley.rect.center().to_vec2();
+    let mut mesh = Mesh::default();
+    for row in &galley.rows {
+        if row.visuals.mesh.is_empty() {
+            continue;
+        }
+        let index_base = mesh.vertices.len() as u32;
+        mesh.indices.extend(
+            row.visuals
+                .mesh
+                .indices
+                .iter()
+                .map(|index| index + index_base),
+        );
+        let row_pos = row.pos.to_vec2();
+        mesh.vertices
+            .extend(row.visuals.mesh.vertices.iter().map(|vertex| {
+                let local = row_pos + vertex.pos.to_vec2() - origin;
+                Vertex {
+                    pos: arc_point(center, arc_radius, local) + offset,
+                    uv: pos2(vertex.uv.x * uv_scale.x, vertex.uv.y * uv_scale.y),
+                    color,
+                }
+            }));
+    }
+    if !mesh.is_empty() {
+        painter.add(Shape::mesh(mesh));
+    }
 }
 
 fn engrave(painter: &egui::Painter, pos: Pos2, anchor: Align2, text: &str, size: f32) {
@@ -960,6 +1046,47 @@ mod tests {
                 "corner {corner:?} fell outside the ball"
             );
         }
+    }
+
+    #[test]
+    fn title_arc_follows_the_ball() {
+        let center = pos2(320.0, 320.0);
+        let arc_r = 260.0;
+        let crown = arc_point(center, arc_r, Vec2::ZERO);
+        assert!((crown.x - center.x).abs() < 1.0e-3);
+        assert!((crown.y - (center.y - arc_r)).abs() < 1.0e-3);
+
+        let side = arc_point(center, arc_r, vec2(arc_r * 0.5, 0.0));
+        let offset = side - center;
+        assert!((offset.length() - arc_r).abs() < 1.0e-2);
+        assert!(side.y > crown.y);
+        assert!(side.x > center.x);
+
+        let top = arc_point(center, arc_r, vec2(0.0, -20.0));
+        assert!(((top - center).length() - (arc_r + 20.0)).abs() < 1.0e-2);
+    }
+
+    #[test]
+    fn curved_title_stays_above_the_preview() {
+        let radius = 320.0;
+        // Round Bound: "Bouncing Boll" is about 5.33 em wide and 1 em tall.
+        let (size, arc_r) = title_metrics(radius, 533.0, 100.0);
+        let half_h = size * 0.5;
+        let half_w = 5.33 * size * 0.5;
+        let theta = half_w / arc_r;
+        assert!(
+            (theta - TITLE_HALF_ANGLE).abs() < 0.05,
+            "title span {theta} rad drifted from the rim angle"
+        );
+        assert!(
+            arc_r + half_h < radius - 8.0,
+            "title crosses the rim at font size {size}"
+        );
+        let end_y = -(arc_r - half_h) * theta.cos();
+        assert!(
+            end_y < -radius * 0.58,
+            "title ends drop into the preview, end_y={end_y}"
+        );
     }
 
     #[test]
