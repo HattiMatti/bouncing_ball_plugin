@@ -544,7 +544,7 @@ fn metal_slider<P: Param>(ui: &mut egui::Ui, param: &P, setter: &ParamSetter) {
         Sense::hover(),
     );
     if let Some(tip) = slider_tip(name) {
-        name_hover.on_hover_text(tip);
+        show_label_tip(ui, &name_hover, tip);
     }
     slider_label(
         &painter,
@@ -610,6 +610,42 @@ fn metal_slider<P: Param>(ui: &mut egui::Ui, param: &P, setter: &ParamSetter) {
     );
 }
 
+/// Tip for a slider name, parked in the lower left of the window.
+/// The plate is solid so it stays readable on the steel.
+fn show_label_tip(ui: &egui::Ui, response: &egui::Response, text: &str) {
+    if !egui::Tooltip::should_show_tooltip(response, false) {
+        return;
+    }
+    let corner = ui.ctx().content_rect().left_bottom() + vec2(12.0, -12.0);
+    let ink = Color32::from_rgb(36, 22, 6);
+    egui::Popup::from_response(response)
+        .kind(egui::PopupKind::Tooltip)
+        .anchor(corner)
+        .align(egui::RectAlign {
+            parent: Align2::LEFT_BOTTOM,
+            child: Align2::LEFT_BOTTOM,
+        })
+        .align_alternatives(&[])
+        .gap(0.0)
+        .width(220.0)
+        .sense(Sense::hover())
+        .interactable(false)
+        .frame(
+            egui::Frame::new()
+                .inner_margin(8)
+                .corner_radius(6)
+                .fill(Color32::from_rgb(255, 214, 120))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(92, 54, 8))),
+        )
+        .style(egui::style::StyleModifier::new(move |style| {
+            style.visuals.override_text_color = Some(ink);
+        }))
+        .show(|ui| {
+            ui.set_max_width(220.0);
+            ui.label(text);
+        });
+}
+
 fn slider_tip(name: &str) -> Option<&'static str> {
     Some(match name {
         "Drop" => "Length of the first gap.",
@@ -631,9 +667,16 @@ where
     let current = param.value();
     let names = T::variants();
     let selected = names.get(current.to_index()).copied().unwrap_or("");
+    let menu_ink = Color32::from_rgb(255, 206, 92);
     egui::ComboBox::from_id_salt(param.name())
         .selected_text(selected)
         .width(width)
+        .popup_style(egui::style::StyleModifier::new(move |style| {
+            style.visuals.override_text_color = Some(menu_ink);
+            style.visuals.selection.stroke.color = menu_ink;
+            style.visuals.window_fill = Color32::from_rgb(22, 16, 8);
+            style.visuals.selection.bg_fill = Color32::from_rgb(84, 52, 12);
+        }))
         .show_ui(ui, |ui| {
             for (index, name) in names.iter().enumerate() {
                 if ui
