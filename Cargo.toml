@@ -1,0 +1,22 @@
+[package]
+name = "bouncing_ball_plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Geometric bouncing-ball retrigger, inspired by Aphex Twin's Bucephalus Bouncing Ball"
+license = "ISC"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+egui = { version = "0.36.1", features = ["default_fonts"] }
+nice-plug = "0.4"
+nice-plug-egui = "0.5"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
